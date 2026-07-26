@@ -1,81 +1,54 @@
 """
 controlador/ctr_marca.py
 =========================
-El CONTROLADOR: es el "intermediario". Solo se encarga de GUARDAR y LEER las
-marcas en el archivo. No muestra menus ni pide datos (de eso se encarga la
-Vista) y no define que es una marca (de eso se encarga el Modelo).
-
-Cada marca se guarda como una fila de texto separada por comas:
-    id,nombre
-Ejemplo:  1,Nike
+El CONTROLADOR: es el "intermediario" entre la Vista y el Modelo.
+Ya NO lee ni escribe un archivo de texto: le pide todo al MarcaDAO
+(que es quien habla con PostgreSQL). Aqui es donde viven las
+VALIDACIONES de negocio (ej. no permitir nombres vacios), y desde
+aqui se decide QUE metodo del DAO llamar segun la operacion.
 """
 
-import os
-
-from modelo.mdl_marca import Marca
+from modelo.mdl_marca import Marca, MarcaDAO
 
 
 class Controlador:
 
-    def __init__(self):
-        # Preparamos la ruta del archivo: media/marcas.txt
-        raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        carpeta = os.path.join(raiz, "media")
-        os.makedirs(carpeta, exist_ok=True)   # crea la carpeta si no existe
-        self.archivo = os.path.join(carpeta, "marcas.txt")
-
     def listar(self):
-        # Lee el archivo y devuelve una lista de objetos Marca.
-        marcas = []
-
-        try:
-            with open(self.archivo, "r", encoding="utf-8") as archivo:
-                for l in archivo:
-                    l = l.strip()
-                    if l == "":
-                        continue
-                    # Cada fila trae 2 datos: id y nombre.
-                    id, nombre = l.split(",")
-                    # Pasamos el id para CONSERVAR el que ya tenia guardado.
-                    marca = Marca(nombre, id)
-                    marcas.append(marca)
-        except FileNotFoundError:
-            # Si el archivo todavia no existe, devolvemos la lista vacia.
-            pass
-        return marcas
-
-    def guardar(self, marcas):
-        # Escribe TODA la lista en el archivo (borra lo viejo y pone lo nuevo).
-        with open(self.archivo, "w", encoding="utf-8") as archivo:
-            for m in marcas:
-                archivo.write(f"{m.id},{m.nombre}\n")
+        # Le pedimos la lista completa al DAO; el Controlador no sabe SQL.
+        return MarcaDAO.listar()
 
     def agregar(self, nombre):
-        marcas = self.listar()
-        # Pedimos el id nuevo al metodo del Modelo: el mas alto + 1.
-        nuevo_id = Marca.siguiente_id(marcas)
-        marcas.append(Marca(nombre, nuevo_id))
-        self.guardar(marcas)
+        # Validacion de negocio: aqui es donde va, no en el Modelo ni en la Vista.
+        if nombre is None or nombre.strip() == "":
+            raise ValueError("El nombre no puede estar vacio.")
+
+        nueva = Marca(nombre=nombre, estado=True)
+        exito = MarcaDAO.insertar(nueva)
+        if not exito:
+            raise ValueError("No se pudo guardar la marca en la base de datos.")
 
     def editar(self, id, nombre):
-        # Buscamos la marca POR SU ID (no por su posicion en la lista).
-        marcas = self.listar()
-        for i in range(len(marcas)):
-            if marcas[i].id == id:
-                # La encontramos: la reemplazamos conservando el MISMO id.
-                marcas[i] = Marca(nombre, id)
-                self.guardar(marcas)
-                return
-        # Si el bucle termina sin encontrarla, avisamos con un error.
-        raise ValueError(f"No existe una marca con id {id}")
+        if nombre is None or nombre.strip() == "":
+            raise ValueError("El nombre no puede estar vacio.")
+
+        # Primero confirmamos que exista antes de intentar actualizarla.
+        marca = MarcaDAO.obtener_por_id(id)
+        if marca is None:
+            raise ValueError(f"No existe una marca con id {id}")
+
+        marca.nombre = nombre
+        exito = MarcaDAO.actualizar(marca)
+        if not exito:
+            raise ValueError("No se pudo actualizar la marca.")
 
     def eliminar(self, id):
-        # Buscamos la marca POR SU ID (no por su posicion en la lista).
-        marcas = self.listar()
-        for i in range(len(marcas)):
-            if marcas[i].id == id:
-                marcas.pop(i)          # la encontramos: la quitamos
-                self.guardar(marcas)
-                return
-        # Si no aparece ningun id igual, lanzamos el error.
-        raise ValueError(f"No existe una marca con id {id}")
+        # Ya NO se borra la fila fisicamente: se desactiva (estado=False).
+        # Motivo: producto tiene FK a marca con ON DELETE RESTRICT, asi
+        # que borrar de verdad una marca en uso rompe la base de datos.
+        marca = MarcaDAO.obtener_por_id(id)
+        if marca is None:
+            raise ValueError(f"No existe una marca con id {id}")
+
+        exito = MarcaDAO.cambiar_estado(id, False)
+        if not exito:
+            raise ValueError("No se pudo desactivar la marca.")

@@ -1,87 +1,65 @@
 """
 controlador/ctr_producto.py
 ============================
-El CONTROLADOR: es el "intermediario". Solo se encarga de GUARDAR y LEER los
-productos en el archivo. No muestra menus ni pide datos (de eso se encarga
-la Vista) y no define que es un producto (de eso se encarga el Modelo).
+El CONTROLADOR: es el "intermediario" entre la Vista y el Modelo.
+Ya NO lee ni escribe un archivo de texto: le pide todo al
+ProductoDAO (que es quien habla con PostgreSQL). Aqui viven las
+VALIDACIONES de negocio (nombre, precio y stock validos).
 
-Cada producto se guarda como una fila de texto separada por comas:
-    id,nombre,id_marca,id_categoria,id_linea,precio,stock
-Ejemplo:  1,Zapatilla Air,1,2,1,59.99,10
-
-Las columnas id_marca, id_categoria e id_linea son las FK: apuntan a los
-ids de los catalogos de Marca, Categoria y Linea.
+Las FK (id_marca, id_categoria, id_linea) la Vista ya las valida
+contra los catalogos antes de llegar aqui; si aun asi alguna fuera
+invalida, PostgreSQL la rechaza solo por la FOREIGN KEY.
 """
 
-import os
-
-from modelo.mdl_producto import Producto
+from modelo.mdl_producto import Producto, ProductoDAO
 
 
 class Controlador:
 
-    def __init__(self):
-        # Preparamos la ruta del archivo: media/productos.txt
-        raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        carpeta = os.path.join(raiz, "media")
-        os.makedirs(carpeta, exist_ok=True)   # crea la carpeta si no existe
-        self.archivo = os.path.join(carpeta, "productos.txt")
-
     def listar(self):
-        # Lee el archivo y devuelve una lista de objetos Producto.
-        productos = []
+        return ProductoDAO.listar()
 
-        try:
-            with open(self.archivo, "r", encoding="utf-8") as archivo:
-                for l in archivo:
-                    l = l.strip()
-                    if l == "":
-                        continue
-                    # Cada fila trae 7 datos, en el mismo orden en que se guardan.
-                    id, nombre, id_marca, id_categoria, id_linea, precio, stock = l.split(",")
-                    producto = Producto(nombre, id_marca, id_categoria, id_linea,
-                                        precio, stock, id)
-                    productos.append(producto)
-        except FileNotFoundError:
-            # Si el archivo todavia no existe, devolvemos la lista vacia.
-            pass
-        return productos
-
-    def guardar(self, productos):
-        # Escribe TODA la lista en el archivo (borra lo viejo y pone lo nuevo).
-        with open(self.archivo, "w", encoding="utf-8") as archivo:
-            for p in productos:
-                archivo.write(f"{p.id},{p.nombre},{p.id_marca},{p.id_categoria},"
-                              f"{p.id_linea},{p.precio},{p.stock}\n")
+    def _validar_datos(self, nombre, precio, stock):
+        if nombre is None or nombre.strip() == "":
+            raise ValueError("El nombre no puede estar vacio.")
+        if precio < 0:
+            raise ValueError("El precio no puede ser negativo.")
+        if stock < 0:
+            raise ValueError("El stock no puede ser negativo.")
 
     def agregar(self, nombre, id_marca, id_categoria, id_linea, precio, stock):
-        productos = self.listar()
-        # Pedimos el id nuevo al metodo del Modelo: el mas alto + 1.
-        nuevo_id = Producto.siguiente_id(productos)
-        productos.append(Producto(nombre, id_marca, id_categoria, id_linea,
-                                  precio, stock, nuevo_id))
-        self.guardar(productos)
+        self._validar_datos(nombre, precio, stock)
+
+        nuevo = Producto(nombre=nombre, id_marca=id_marca, id_categoria=id_categoria,
+                          id_linea=id_linea, precio=precio, stock=stock, estado=True)
+        exito = ProductoDAO.insertar(nuevo)
+        if not exito:
+            raise ValueError("No se pudo guardar el producto en la base de datos.")
 
     def editar(self, id, nombre, id_marca, id_categoria, id_linea, precio, stock):
-        # Buscamos el producto POR SU ID (no por su posicion en la lista).
-        productos = self.listar()
-        for i in range(len(productos)):
-            if productos[i].id == id:
-                # Lo encontramos: lo reemplazamos conservando el MISMO id.
-                productos[i] = Producto(nombre, id_marca, id_categoria, id_linea,
-                                        precio, stock, id)
-                self.guardar(productos)
-                return
-        # Si el bucle termina sin encontrarlo, avisamos con un error.
-        raise ValueError(f"No existe un producto con id {id}")
+        self._validar_datos(nombre, precio, stock)
+
+        producto = ProductoDAO.obtener_por_id(id)
+        if producto is None:
+            raise ValueError(f"No existe un producto con id {id}")
+
+        producto.nombre = nombre
+        producto.id_marca = id_marca
+        producto.id_categoria = id_categoria
+        producto.id_linea = id_linea
+        producto.precio = precio
+        producto.stock = stock
+
+        exito = ProductoDAO.actualizar(producto)
+        if not exito:
+            raise ValueError("No se pudo actualizar el producto.")
 
     def eliminar(self, id):
-        # Buscamos el producto POR SU ID (no por su posicion en la lista).
-        productos = self.listar()
-        for i in range(len(productos)):
-            if productos[i].id == id:
-                productos.pop(i)          # lo encontramos: lo quitamos
-                self.guardar(productos)
-                return
-        # Si no aparece ningun id igual, lanzamos el error.
-        raise ValueError(f"No existe un producto con id {id}")
+        # Ya NO se borra la fila fisicamente: se desactiva (estado=False).
+        producto = ProductoDAO.obtener_por_id(id)
+        if producto is None:
+            raise ValueError(f"No existe un producto con id {id}")
+
+        exito = ProductoDAO.cambiar_estado(id, False)
+        if not exito:
+            raise ValueError("No se pudo desactivar el producto.")
